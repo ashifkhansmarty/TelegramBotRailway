@@ -15,7 +15,7 @@ from telegram.ext import (
 
 # ---------------- CONFIG ----------------
 BOT_TOKEN = "7639044509:AAH8-Uh024ffsU6E2jq9kVi2QFwJfPAARrI"
-WEBHOOK_URL = "https://YOUR_RENDER_URL.onrender.com/webhook"  # <-- CHANGE THIS AFTER DEPLOY
+WEBHOOK_URL = "https://telegrambotrailway-2.onrender.com/webhook"  # <-- CHANGE THIS AFTER DEPLOY
 API_BASE = "https://mynkapi.amit1100941.workers.dev/api"
 API_KEY = "mynk01"
 ADMINS = [1229178839]
@@ -327,3 +327,4 @@ asyncio.run(setup())
 
 if __name__ == "__main__":
     app_flask.run(host="0.0.0.0", port=10000)
+
