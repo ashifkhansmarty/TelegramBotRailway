@@ -1,68 +1,122 @@
 import os
-import requests
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
-from flask import Flask
-from threading import Thread
+import sqlite3
+import aiohttp
+import asyncio
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    CallbackQueryHandler,
+    filters
+)
 
-# ===================== BOT TOKEN =====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-# =====================================================
+ADMIN_USERNAME = "ashifkhansmart"
+DB_PATH = "users.db"
 
-# -------- Telegram Handlers --------
+# ---------------- Database -----------------
+conn = sqlite3.connect(DB_PATH)
+cursor = conn.cursor()
+cursor.execute(
+    """CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        credits INTEGER DEFAULT 3
+    )"""
+)
+conn.commit()
+
+# ---------------- Helper Functions -----------------
+def get_credits(user_id):
+    cursor.execute("SELECT credits FROM users WHERE user_id=?", (user_id,))
+    row = cursor.fetchone()
+    if row:
+        return row[0]
+    else:
+        cursor.execute("INSERT INTO users (user_id, credits) VALUES (?, ?)", (user_id, 3))
+        conn.commit()
+        return 3
+
+def deduct_credit(user_id):
+    credits = get_credits(user_id)
+    if credits > 0:
+        cursor.execute("UPDATE users SET credits=? WHERE user_id=?", (credits-1, user_id))
+        conn.commit()
+        return True
+    return False
+
+# ---------------- Bot Commands -----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Send a 10-digit mobile number to fetch details.")
+    user_id = update.effective_user.id
+    credits = get_credits(user_id)
+    await update.message.reply_text(
+        f"Welcome! You have {credits} credits.\nSend a 10-digit mobile number to search.\nCredit : ASHIF KHAN"
+    )
 
+async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    credits = get_credits(user_id)
+    await update.message.reply_text(f"Your credits: {credits}\nCredit : ASHIF KHAN")
+
+# ---------------- API Request -----------------
+async def fetch_mobile(number):
+    url = f"https://mynkapi.amit1100941.workers.dev/api?key=mynk01&type=mobile&term={number}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            return await resp.json()
+
+# ---------------- Message Handler -----------------
 async def handle_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    num = update.message.text.strip()
-    if not num.isdigit() or len(num) != 10:
-        await update.message.reply_text("❌ Mobile number must be exactly 10 digits.")
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+
+    if not text.isdigit() or len(text) != 10:
+        await update.message.reply_text("❌ Mobile number must be exactly 10 digits.\nCredit : ASHIF KHAN")
         return
 
-    url = f"https://mynkapi.amit1100941.workers.dev/api?key=mynk01&type=mobile&term={num}"
+    credits = get_credits(user_id)
+    if credits == 0:
+        await update.message.reply_text(f"❌ You have 0 credits. Contact Admin @{ADMIN_USERNAME} for credit.\nCredit : ASHIF KHAN")
+        return
+
+    if not deduct_credit(user_id):
+        await update.message.reply_text(f"❌ You have 0 credits. Contact Admin @{ADMIN_USERNAME} for credit.\nCredit : ASHIF KHAN")
+        return
+
+    msg = await update.message.reply_text("🔎 Searching...")
+
     try:
-        response = requests.get(url, timeout=10).json()
-    except:
-        await update.message.reply_text("⚠️ Error fetching data.")
-        return
+        data = await fetch_mobile(text)
+        result = data.get("result", {})
+        message = result.get("message", "No records found")
+        
+        if "No records found" in message:
+            await msg.edit_text(f"❌ {message}\nCredit : ASHIF KHAN")
+        else:
+            # Inline button example for multiple results
+            buttons = [[InlineKeyboardButton("View Details", callback_data=text)]]
+            keyboard = InlineKeyboardMarkup(buttons)
+            await msg.edit_text(f"✅ Result found for {text}\nCredit : ASHIF KHAN", reply_markup=keyboard)
+    except Exception as e:
+        await msg.edit_text(f"❌ Error occurred: {e}\nCredit : ASHIF KHAN")
 
-    # Handle no result
-    if isinstance(response.get("result"), dict):
-        msg = response["result"].get("message")
-        if msg:
-            await update.message.reply_text(f"❌ {msg}\n\nCredit : ASHIF KHAN")
-            return
+# ---------------- Callback Query -----------------
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    number = query.data
+    data = await fetch_mobile(number)
+    await query.edit_message_text(f"📊 Details:\n{data}\nCredit : ASHIF KHAN")
 
-    # Handle result list
-    if isinstance(response.get("result"), list):
-        messages = []
-        for r in response["result"]:
-            messages.append(
-                f"📱 Name: {r.get('name','N/A')}\n"
-                f"Mobile: {r.get('mobile','N/A')}\n"
-                f"Father Name: {r.get('father_name','N/A')}\n"
-                f"Address: {r.get('address','N/A')}\n"
-                f"Alt Mobile: {r.get('alt_mobile','N/A')}\n"
-                f"Circle: {r.get('circle','N/A')}\n"
-                f"ID Number: {r.get('id_number','N/A')}\n"
-                f"Email: {r.get('email','N/A')}\n"
-                f"Credit : ASHIF KHAN"
-            )
-        await update.message.reply_text("\n\n".join(messages))
+# ---------------- Main -----------------
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# -------- Telegram Bot Setup --------
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_number))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("balance", balance))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_number))
+    app.add_handler(CallbackQueryHandler(button_callback))
 
-# -------- Flask Keep-Alive --------
-flask_app = Flask("")
-
-@flask_app.route("/")
-def home():
-    return "Bot is running 24/7!"
-
-Thread(target=lambda: flask_app.run(host="0.0.0.0", port=10000)).start()
-
-# -------- Run Telegram Bot --------
-app.run_polling()
+    print("Bot is running...")
+    app.run_polling()
